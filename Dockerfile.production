@@ -1,0 +1,162 @@
+FROM python:3.11-slim
+
+LABEL maintainer="GPS Monitoring Team"
+LABEL description="Production GPS Queue Monitoring with Discord Alerts Only"
+LABEL version="2.0"
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    procps \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir --timeout=300 -r requirements.txt
+
+# Create necessary directories
+RUN mkdir -p /app/scripts /app/config /app/logs
+
+# Copy application files
+COPY scripts/ ./scripts/
+COPY config/ ./config/
+
+# Create production entrypoint
+RUN cat > entrypoint.py << 'EOF'
+#!/usr/bin/env python3
+"""
+Production GPS Monitor Entrypoint (Discord Only)
+Starts monitoring with Discord alerts and health endpoints
+"""
+
+import os
+import sys
+import time
+import signal
+import logging
+from datetime import datetime
+
+# Setup logging
+def setup_logging():
+    log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+    log_format = os.getenv('LOG_FORMAT', 'json')
+    
+    if log_format.lower() == 'json':
+        import json
+        
+        class JSONFormatter(logging.Formatter):
+            def format(self, record):
+                log_entry = {
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'level': record.levelname,
+                    'service': 'gps-monitor',
+                    'message': record.getMessage(),
+                    'module': record.module,
+                    'function': record.funcName,
+                    'line': record.lineno
+                }
+                if record.exc_info:
+                    log_entry['exception'] = self.formatException(record.exc_info)
+                return json.dumps(log_entry)
+        
+        handler = logging.StreamHandler()
+        handler.setFormatter(JSONFormatter())
+    else:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        handler.setFormatter(formatter)
+    
+    root_logger = logging.getLogger()
+    root_logger.addHandler(handler)
+    root_logger.setLevel(getattr(logging, log_level))
+
+# Graceful shutdown handler
+def signal_handler(signum, frame):
+    print(f"\nReceived signal {signum}, shutting down gracefully...")
+    
+    # Send shutdown notification if possible
+    try:
+        monitor = getattr(signal_handler, 'monitor_instance', None)
+        if monitor and hasattr(monitor, 'send_shutdown_notification'):
+            monitor.send_shutdown_notification()
+    except Exception as e:
+        print(f"Failed to send shutdown notification: {e}")
+    
+    print("GPS Monitor shutdown complete")
+    sys.exit(0)
+
+def main():
+    print("GPS Production Monitor v2.0 (Discord Only)")
+    print("=" * 50)
+    
+    # Setup logging
+    setup_logging()
+    logger = logging.getLogger(__name__)
+    
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Validate environment
+    required_vars = [
+        'RABBITMQ_HOST',
+        'RABBITMQ_USERNAME',
+        'RABBITMQ_PASSWORD',
+        'DISCORD_WEBHOOK_URL'
+    ]
+    
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    if missing_vars:
+        logger.error(f"Missing required environment variables: {missing_vars}")
+        sys.exit(1)
+    
+    # Initialize monitor
+    try:
+        # Add scripts to path
+        sys.path.append('/app/scripts')
+        from gps_monitor import ProductionGPSMonitor
+        
+        monitor = ProductionGPSMonitor()
+        signal_handler.monitor_instance = monitor
+        
+        logger.info("GPS Monitor initialized successfully")
+        logger.info(f"Target: {os.getenv('RABBITMQ_HOST')}:{os.getenv('RABBITMQ_PORT')}")
+        logger.info(f"Mode: {os.getenv('MONITORING_MODE', 'remote')}")
+        logger.info("Alert system: Discord only")
+        
+        # Start monitoring
+        monitor.run()
+        
+    except Exception as e:
+        logger.error(f"Failed to start GPS monitor: {e}", exc_info=True)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+EOF
+
+# Make entrypoint executable
+RUN chmod +x entrypoint.py
+
+# Set environment variables
+ENV PYTHONPATH=/app:/app/scripts
+ENV PYTHONUNBUFFERED=1
+ENV DEPLOYMENT_ENVIRONMENT=production
+
+# Expose health check port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Production entrypoint
+ENTRYPOINT ["python", "entrypoint.py"]

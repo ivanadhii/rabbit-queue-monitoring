@@ -1,0 +1,19 @@
+# GPS Monitoring Dependencies (Discord Only)
+# ==========================================
+
+# Core HTTP and API libraries
+requests>=2.31.0
+urllib3>=1.26.0
+
+# Configuration and scheduling
+python-dotenv>=1.0.0
+schedule>=1.2.0
+
+# File watching for configuration changes
+watchdog>=3.0.0
+
+# JSON validation and processing
+jsonschema>=4.0.0
+
+# Additional utilities
+pytz>=2023.3

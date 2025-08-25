@@ -1,0 +1,77 @@
+services:
+  # GPS Queue Monitor (Production Remote Monitoring - Discord Only)
+  gps-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    container_name: gps-production-monitor
+    environment:
+      # Target RabbitMQ (Remote server)
+      - RABBITMQ_HOST=${RABBITMQ_HOST}
+      - RABBITMQ_PORT=${RABBITMQ_PORT}
+      - RABBITMQ_USERNAME=${RABBITMQ_USERNAME}
+      - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
+      
+      # Alerts
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      
+      # Monitoring settings
+      - COLLECTION_INTERVAL=${COLLECTION_INTERVAL}
+      - ALERT_COOLDOWN_MINUTES=${ALERT_COOLDOWN_MINUTES}
+      - HEALTH_CHECK_ENABLED=${HEALTH_CHECK_ENABLED}
+      
+      # Production settings
+      - MONITORING_MODE=${MONITORING_MODE}
+      - READ_ONLY_MODE=${READ_ONLY_MODE}
+      - TARGET_SYSTEM_NAME=${TARGET_SYSTEM_NAME}
+      - DEPLOYMENT_ENVIRONMENT=${DEPLOYMENT_ENVIRONMENT}
+      
+      # Configuration
+      - QUEUE_CONFIG_FILE=${QUEUE_CONFIG_FILE}
+      - CONFIG_VALIDATION_MODE=${CONFIG_VALIDATION_MODE}
+      
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL}
+      - LOG_FORMAT=${LOG_FORMAT}
+      
+      # Health check
+      - HEALTH_CHECK_PORT=${HEALTH_CHECK_PORT}
+      - HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL}
+      
+      # Alert filtering
+      - MINIMUM_ALERT_SEVERITY=${MINIMUM_ALERT_SEVERITY}
+      - ENABLE_RECOVERY_ALERTS=${ENABLE_RECOVERY_ALERTS}
+      - ENABLE_LIFECYCLE_ALERTS=${ENABLE_LIFECYCLE_ALERTS}
+    
+    volumes:
+      - ./config:/app/config:ro
+      - ./logs:/app/logs
+    
+    ports:
+      - "${HEALTH_CHECK_PORT}:8080"
+    
+    networks:
+      - gps-monitoring
+    
+    restart: unless-stopped
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    labels:
+      - "service.name=gps-production-monitor"
+      - "service.version=2.0"
+      - "monitoring.type=discord_only"
+
+networks:
+  gps-monitoring:
+    driver: bridge
+    name: gps-monitoring-network
+
+volumes:
+  logs:
+    driver: local

@@ -1,0 +1,96 @@
+{
+  "queue_monitoring": {
+    "queues": {
+      "gps_queue": {
+        "category": "CORE",
+        "thresholds": {
+          "high_backlog": 500,
+          "critical_lag_seconds": 10,
+          "no_consumers_alert": true
+        },
+        "description": "Real-time GPS position data - critical for live tracking"
+      },
+      "current_position_queue": {
+        "category": "CORE",
+        "thresholds": {
+          "high_backlog": 500,
+          "critical_lag_seconds": 5,
+          "no_consumers_alert": true
+        },
+        "description": "Current vehicle positions for real-time display"
+      },
+      "bus_tracking_queue": {
+        "category": "CORE",
+        "thresholds": {
+          "high_backlog": 500,
+          "critical_lag_seconds": 15,
+          "no_consumers_alert": true
+        },
+        "description": "Bus tracking data for passenger information"
+      },
+      "pis_queue": {
+        "category": "CORE",
+        "thresholds": {
+          "high_backlog": 500,
+          "critical_lag_seconds": 8,
+          "no_consumers_alert": true
+        },
+        "description": "Passenger Information System display data"
+      },
+      "gps_only": {
+        "category": "CORE",
+        "thresholds": {
+          "high_backlog": 500,
+          "critical_lag_seconds": 30,
+          "no_consumers_alert": false
+        },
+        "description": "GPS data processing pipeline"
+      },
+      "snap_to_road_queue": {
+        "category": "CORE",
+        "thresholds": {
+          "high_backlog": 500,
+          "critical_lag_seconds": 60,
+          "no_consumers_alert": false
+        },
+        "description": "GPS coordinate road snapping processing"
+      },
+      "gps_history_queue": {
+        "category": "CORE",
+        "thresholds": {
+          "high_backlog": 500,
+          "critical_lag_seconds": 300,
+          "no_consumers_alert": false
+        },
+        "description": "Historical GPS data storage and archiving"
+      },
+      "arrival_history_queue": {
+        "category": "CORE",
+        "thresholds": {
+          "high_backlog": 500,
+          "critical_lag_seconds": 180,
+          "no_consumers_alert": false
+        },
+        "description": "Vehicle arrival history logging"
+      },
+      "estimate_time_distance_queue": {
+        "category": "CORE",
+        "thresholds": {
+          "high_backlog": 500,
+          "critical_lag_seconds": 45,
+          "no_consumers_alert": false
+        },
+        "description": "ETA and distance calculations"
+      },
+      "mobile_armada_queue": {
+        "category": "CORE",
+        "thresholds": {
+          "high_backlog": 500,
+          "critical_lag_seconds": 30,
+          "no_consumers_alert": false
+        },
+        "description": "Mobile fleet management data"
+      }
+    }
+  }
+}

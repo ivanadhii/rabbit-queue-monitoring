@@ -1,0 +1,153 @@
+# GPS Production Queue Monitoring - .gitignore
+# =====================================================
+
+# Environment and Configuration
+.env
+.env.local
+.env.production
+.env.staging
+*.env
+
+# Sensitive Configuration Files
+config/production.json
+config/staging.json
+config/*production*
+config/*staging*
+
+# Logs
+logs/
+*.log
+*.log.*
+*.out
+*.err
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# IDE and Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+docker-compose.local.yml
+
+# Runtime and Cache
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.coverage.*
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Temporary Files
+*.tmp
+*.temp
+*.bak
+*.backup
+.tmp/
+temp/
+
+# OS Generated Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Production Specific
+# Backup configurations
+config/*.backup
+config/*.bak
+
+# Monitoring Data
+data/
+metrics/
+monitoring_data/
+
+# SSL Certificates (if any)
+*.pem
+*.key
+*.crt
+*.p12
+ssl/
+certs/
+
+# Documentation Build
+docs/_build/
+docs/build/
+
+# Jupyter Notebooks (if used for analysis)
+.ipynb_checkpoints/
+*.ipynb
+
+# Node.js (if any frontend tools)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local Development
+local/
+dev/
+development/
+
+# Test Files
+test_*.py
+*_test.py
+tests/local/
+tests/temp/
+
+# Scripts with sensitive data
+scripts/production_*
+scripts/deploy_*
+scripts/*_production.*
+
+# Monitoring artifacts
+health_check_output/
+alert_history/
+monitoring_output/
