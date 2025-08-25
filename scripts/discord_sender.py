@@ -215,7 +215,8 @@ class DiscordAlertSender:
 # Utility functions for testing
 def test_discord_webhook():
     """Test Discord webhook with various alert types"""
-    webhook_url = "https://discord.com/api/webhooks/1407547385953124506/ilHPIO811RC9sQW9UBN6M3fG1GA2yOr0IZWVzYgUm6aqDe3Eo9sfH75NtvpjpimdNWXo"
+    #webhook_url = "https://discord.com/api/webhooks/1407547385953124506/ilHPIO811RC9sQW9UBN6M3fG1GA2yOr0IZWVzYgUm6aqDe3Eo9sfH75NtvpjpimdNWXo"
+    webhook_url = "https://discord.com/api/webhooks/1407207534313603182/tAwwVwss5Tfyd9Wu8ogn7O4KK4mb4elXg7hmDgTiVrmcyL3Rls770Svm2oDqyQpHkM_H"
     
     discord = DiscordAlertSender(webhook_url)
     

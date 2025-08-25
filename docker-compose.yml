@@ -1,5 +1,32 @@
 services:
-  # GPS Queue Monitor (Production Remote Monitoring - Discord Only)
+  # InfluxDB Time Series Database
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: gps-influxdb
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUXDB_USERNAME:-admin}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_PASSWORD:-password123}
+      - DOCKER_INFLUXDB_INIT_ORG=${INFLUXDB_ORG:-gps-monitoring}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET:-gps-metrics}
+      - DOCKER_INFLUXDB_INIT_RETENTION=${INFLUXDB_RETENTION:-30d}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN:-gps-monitoring-token}
+    volumes:
+      - ./data/influxdb:/var/lib/influxdb2
+      - ./config/influxdb:/etc/influxdb2
+    ports:
+      - "${INFLUXDB_PORT:-8086}:8086"
+    networks:
+      - gps-monitoring
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "influx", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # GPS Queue Monitor (Updated with InfluxDB)
   gps-monitor:
     build:
       context: .
@@ -12,46 +39,56 @@ services:
       - RABBITMQ_USERNAME=${RABBITMQ_USERNAME}
       - RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
       
-      # Alerts
+      # InfluxDB Configuration
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:-gps-monitoring-token}
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-gps-monitoring}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-gps-metrics}
+      
+      # Discord Alert Configuration
       - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
       
       # Monitoring settings
-      - COLLECTION_INTERVAL=${COLLECTION_INTERVAL}
-      - ALERT_COOLDOWN_MINUTES=${ALERT_COOLDOWN_MINUTES}
-      - HEALTH_CHECK_ENABLED=${HEALTH_CHECK_ENABLED}
+      - COLLECTION_INTERVAL=${COLLECTION_INTERVAL:-15}
+      - ALERT_COOLDOWN_MINUTES=${ALERT_COOLDOWN_MINUTES:-5}
+      - HEALTH_CHECK_ENABLED=${HEALTH_CHECK_ENABLED:-true}
       
       # Production settings
-      - MONITORING_MODE=${MONITORING_MODE}
-      - READ_ONLY_MODE=${READ_ONLY_MODE}
-      - TARGET_SYSTEM_NAME=${TARGET_SYSTEM_NAME}
-      - DEPLOYMENT_ENVIRONMENT=${DEPLOYMENT_ENVIRONMENT}
+      - MONITORING_MODE=${MONITORING_MODE:-remote}
+      - READ_ONLY_MODE=${READ_ONLY_MODE:-true}
+      - TARGET_SYSTEM_NAME=${TARGET_SYSTEM_NAME:-GPS-Production-Server}
+      - DEPLOYMENT_ENVIRONMENT=${DEPLOYMENT_ENVIRONMENT:-production}
       
       # Configuration
-      - QUEUE_CONFIG_FILE=${QUEUE_CONFIG_FILE}
-      - CONFIG_VALIDATION_MODE=${CONFIG_VALIDATION_MODE}
+      - QUEUE_CONFIG_FILE=${QUEUE_CONFIG_FILE:-config/queues.json}
+      - CONFIG_VALIDATION_MODE=${CONFIG_VALIDATION_MODE:-basic}
       
       # Logging
-      - LOG_LEVEL=${LOG_LEVEL}
-      - LOG_FORMAT=${LOG_FORMAT}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
       
       # Health check
-      - HEALTH_CHECK_PORT=${HEALTH_CHECK_PORT}
-      - HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL}
+      - HEALTH_CHECK_PORT=${HEALTH_CHECK_PORT:-8080}
+      - HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-60}
       
       # Alert filtering
-      - MINIMUM_ALERT_SEVERITY=${MINIMUM_ALERT_SEVERITY}
-      - ENABLE_RECOVERY_ALERTS=${ENABLE_RECOVERY_ALERTS}
-      - ENABLE_LIFECYCLE_ALERTS=${ENABLE_LIFECYCLE_ALERTS}
+      - MINIMUM_ALERT_SEVERITY=${MINIMUM_ALERT_SEVERITY:-warning}
+      - ENABLE_RECOVERY_ALERTS=${ENABLE_RECOVERY_ALERTS:-true}
+      - ENABLE_LIFECYCLE_ALERTS=${ENABLE_LIFECYCLE_ALERTS:-true}
     
     volumes:
       - ./config:/app/config:ro
       - ./logs:/app/logs
     
     ports:
-      - "${HEALTH_CHECK_PORT}:8080"
+      - "${HEALTH_CHECK_PORT:-8080}:8080"
     
     networks:
       - gps-monitoring
+    
+    depends_on:
+      influxdb:
+        condition: service_healthy
     
     restart: unless-stopped
     
@@ -64,8 +101,59 @@ services:
     
     labels:
       - "service.name=gps-production-monitor"
-      - "service.version=2.0"
-      - "monitoring.type=discord_only"
+      - "service.version=3.0"
+      - "monitoring.type=influxdb_discord"
+
+  # Dashboard Web Interface
+  gps-dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: gps-dashboard
+    environment:
+      # InfluxDB Connection
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:-gps-monitoring-token}
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-gps-monitoring}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-gps-metrics}
+      
+      # Dashboard Settings
+      - DASHBOARD_HOST=0.0.0.0
+      - DASHBOARD_PORT=8000
+      - DASHBOARD_DEBUG=false
+      
+      # System Info
+      - TARGET_SYSTEM_NAME=${TARGET_SYSTEM_NAME:-GPS-Production-Server}
+      - DEPLOYMENT_ENVIRONMENT=${DEPLOYMENT_ENVIRONMENT:-production}
+    
+    ports:
+      - "${DASHBOARD_PORT:-3000}:8000"
+    
+    volumes:
+      - ./config:/app/config:ro
+    
+    networks:
+      - gps-monitoring
+    
+    depends_on:
+      influxdb:
+        condition: service_healthy
+      gps-monitor:
+        condition: service_healthy
+    
+    restart: unless-stopped
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    
+    labels:
+      - "service.name=gps-dashboard"
+      - "service.version=1.0"
+      - "service.type=web_interface"
 
 networks:
   gps-monitoring:
@@ -73,5 +161,7 @@ networks:
     name: gps-monitoring-network
 
 volumes:
+  influxdb_data:
+    driver: local
   logs:
     driver: local

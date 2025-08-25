@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Production Queue Monitoring System (Discord Only)
-Remote monitoring of RabbitMQ queues for RMQ-Queue system
+Production Queue Monitoring System (InfluxDB + Discord)
+Remote monitoring of RabbitMQ queues for GPS Queue system
 """
 
 import os
@@ -10,17 +10,21 @@ import time
 import requests
 import logging
 import threading
-from datetime import datetime
-from typing import Dict, Any, Tuple
+import signal
+import sys
+from datetime import datetime, timedelta
+from typing import Dict, Any, Tuple, Set
 from pathlib import Path
+import re
 
 # File watching
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-# Import Discord sender and Health server
+# Import Discord sender, Health server, and InfluxDB writer
 from discord_sender import DiscordAlertSender
 from health_server import HealthServer
+from influx_writer import InfluxDBWriter
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -33,7 +37,7 @@ class QueueConfigHandler(FileSystemEventHandler):
         self.monitor = monitor_instance
         
     def on_modified(self, event):
-        if event.src_path.endswith('queues.json'):
+        if event.src_path.endswith('.json') and 'queue' in event.src_path.lower():
             logger.info(f"Configuration file changed: {event.src_path}")
             time.sleep(0.5)  # Brief delay to ensure file write is complete
             self.monitor.reload_configuration()
@@ -86,7 +90,7 @@ class AlertRecoveryTracker:
 
 
 class ProductionGPSMonitor:
-    """Production Queue Monitor with Discord-only alerting"""
+    """Production Queue Monitor with InfluxDB storage and Discord alerting"""
     
     def __init__(self):
         # Configuration
@@ -124,6 +128,19 @@ class ProductionGPSMonitor:
         self.target_system_name = os.getenv('TARGET_SYSTEM_NAME', 'Remote-RabbitMQ')
         self.shutdown_notification_sent = False
         
+        # Queue discovery
+        self.discovered_queues = set()
+        self.queue_discovery_enabled = False
+        
+        # InfluxDB writer (NEW)
+        try:
+            self.influx_writer = InfluxDBWriter()
+            logger.info("InfluxDB writer initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize InfluxDB writer: {e}")
+            logger.warning("Continuing without InfluxDB storage")
+            self.influx_writer = None
+        
         # Initialize components
         self.load_configuration()
         self.setup_file_watcher()
@@ -132,6 +149,7 @@ class ProductionGPSMonitor:
         logger.info(f"Queue Monitor initialized - Mode: {self.monitoring_mode}")
         logger.info(f"Target: {self.rabbitmq_host}:{self.rabbitmq_port}")
         logger.info(f"Queues: {len(self.target_queues)} total ({len(self.core_queues)} CORE)")
+        logger.info(f"InfluxDB: {'Enabled' if self.influx_writer else 'Disabled'}")
         logger.info("Alert system: Discord only")
     
     def load_configuration(self):
@@ -244,6 +262,124 @@ class ProductionGPSMonitor:
         """Check if should alert when no consumers"""
         return self.queue_thresholds.get(queue_name, {}).get('no_consumers_alert', False)
     
+    def discover_and_monitor_queues(self) -> Set[str]:
+        """Auto-discover and register new queues"""
+        if not self.queue_discovery_enabled:
+            return set(self.target_queues)
+        
+        try:
+            # Get all queues from config
+            config_queues = set(self.target_queues)
+            
+            # Get all matching queues from server
+            server_queues = self.get_matching_server_queues()
+            
+            # Find new queues
+            new_queues = server_queues - self.discovered_queues
+            
+            if new_queues:
+                logger.info(f"Discovered new queues: {new_queues}")
+                self.register_new_queues(new_queues)
+                self.send_discovery_notification(new_queues)
+            
+            # Update discovered set
+            self.discovered_queues = server_queues
+            
+            return server_queues
+            
+        except Exception as e:
+            logger.error(f"Error during queue discovery: {e}")
+            return set(self.target_queues)  # Fallback to config queues
+    
+    def get_matching_server_queues(self) -> Set[str]:
+        """Get queues that match pattern or config"""
+        try:
+            response = requests.get(f"{self.rabbitmq_url}/api/queues", auth=self.auth, timeout=10)
+            response.raise_for_status()
+            all_queues = [q['name'] for q in response.json()]
+            
+            # Method 1: From config file
+            config_queues = set(self.target_queues)
+            
+            # Method 2: Pattern matching for auto-discovery
+            patterns = [
+                r'^gps_queue.*',
+                r'^.*_position_queue$',
+                r'^bus_tracking.*',
+                r'^pis_queue.*'
+            ]
+            
+            pattern_matches = set()
+            for queue in all_queues:
+                for pattern in patterns:
+                    if re.match(pattern, queue, re.IGNORECASE):
+                        pattern_matches.add(queue)
+            
+            # Union of config + patterns
+            return config_queues.union(pattern_matches)
+            
+        except Exception as e:
+            logger.error(f"Error getting server queues: {e}")
+            return set(self.target_queues)  # Fallback to config
+    
+    def register_new_queues(self, new_queues: Set[str]):
+        """Register newly discovered queues"""
+        for queue_name in new_queues:
+            # Determine category based on patterns
+            category = self.categorize_queue_by_pattern(queue_name)
+            
+            if category == 'CORE':
+                self.core_queues.append(queue_name)
+            else:
+                self.support_queues.append(queue_name)
+            
+            # Add to target queues
+            if queue_name not in self.target_queues:
+                self.target_queues.append(queue_name)
+            
+            # Set default thresholds
+            self.queue_thresholds[queue_name] = {
+                'high_backlog': 1000,
+                'critical_lag_seconds': 60,
+                'no_consumers_alert': category == 'CORE'
+            }
+            
+            logger.info(f"Registered new {category} queue: {queue_name}")
+    
+    def categorize_queue_by_pattern(self, queue_name: str) -> str:
+        """Categorize queue based on naming patterns"""
+        # CORE queue patterns (critical for operations)
+        core_patterns = [
+            r'^gps_queue(?!_history).*',      # GPS queues except history
+            r'^current_position_queue.*',      # Real-time positioning
+            r'^bus_tracking_queue.*',          # Bus tracking
+            r'^pis_queue.*',                   # Passenger information
+        ]
+        
+        for pattern in core_patterns:
+            if re.match(pattern, queue_name, re.IGNORECASE):
+                return "CORE"
+        
+        # Everything else is SUPPORT
+        return "SUPPORT"
+    
+    def send_discovery_notification(self, new_queues: Set[str]):
+        """Send notification about newly discovered queues"""
+        queue_list = ', '.join(sorted(new_queues))
+        core_count = sum(1 for q in new_queues if self.categorize_queue_by_pattern(q) == 'CORE')
+        support_count = len(new_queues) - core_count
+        
+        alert_data = {
+            "alert_name": "New Queues Discovered",
+            "description": f"QUEUE DISCOVERY\n\n**{len(new_queues)}** new queues discovered and added to monitoring:\n\n{queue_list}\n\n**CORE**: {core_count} queues\n**SUPPORT**: {support_count} queues\n\nAutomatic monitoring started.",
+            "severity": "info",
+            "alert_type": "queue_discovery",
+            "status": "firing",
+            "value": f"{len(new_queues)} queues",
+            "system": "RMQ-Queue"
+        }
+        self.send_discord_alert(alert_data)
+    
     def get_queue_details(self) -> Dict[str, Dict]:
         """Get queue details from RabbitMQ Management API"""
         try:
@@ -254,16 +390,19 @@ class ProductionGPSMonitor:
             )
             response.raise_for_status()
             
-            # Filter only target queues
+            # Get current monitored queues (including discovered ones)
+            current_queues = self.discover_and_monitor_queues()
+            
+            # Filter only monitored queues
             all_queues = response.json()
-            target_queue_data = {}
+            monitored_queue_data = {}
             
             for queue in all_queues:
                 queue_name = queue.get('name', '')
-                if queue_name in self.target_queues:
-                    target_queue_data[queue_name] = queue
+                if queue_name in current_queues:
+                    monitored_queue_data[queue_name] = queue
             
-            return target_queue_data
+            return monitored_queue_data
             
         except Exception as e:
             logger.error(f"Error fetching queue details: {e}")
@@ -284,7 +423,7 @@ class ProductionGPSMonitor:
         
         elif abs(net_rate) <= 0.1:  # Stable
             if deliver_rate > 0:
-                stable_lag = messages_ready / deliver_rate
+                stable_lag = messages_ready / deliver_rate if deliver_rate > 0 else 0
                 return "STABLE", stable_lag, f"Stable {stable_lag:.1f}s lag"
             else:
                 return "STALLED", 999, "No processing activity"
@@ -442,12 +581,7 @@ class ProductionGPSMonitor:
         logger.info(f"Queue Status - {timestamp}")
         logger.info("=" * 90)
         
-        for queue_name in self.target_queues:
-            if queue_name not in queue_data:
-                logger.warning(f"Queue '{queue_name}' not found on target server")
-                continue
-            
-            queue = queue_data[queue_name]
+        for queue_name, queue in queue_data.items():
             category = "CORE" if self.is_core_queue(queue_name) else "SUPPORT"
             
             # Extract metrics
@@ -483,6 +617,14 @@ class ProductionGPSMonitor:
         logger.info(f"Total Backlog: {total_backlog:,} messages")
         logger.info(f"CORE Queues Healthy: {core_healthy}/{total_core}")
         
+        # NEW: Store metrics in InfluxDB
+        if self.influx_writer:
+            try:
+                self.influx_writer.write_queue_metrics(queue_data)
+                logger.debug("Metrics stored in InfluxDB successfully")
+            except Exception as e:
+                logger.error(f"Failed to store metrics in InfluxDB: {e}")
+        
         # System-wide alerts
         self.check_system_alerts(total_backlog, core_healthy, total_core)
     
@@ -500,7 +642,7 @@ class ProductionGPSMonitor:
                     "alert_type": "system_backlog",
                     "status": "firing",
                     "value": f"{total_backlog:,} messages",
-                    "affected_queues": f"{len([q for q in self.target_queues if q in self.get_queue_details()])}",
+                    "affected_queues": f"{len(self.target_queues)}",
                     "system": "RMQ-Queue"
                 }
                 self.send_discord_alert(alert_data)
@@ -525,15 +667,18 @@ class ProductionGPSMonitor:
     
     def send_startup_notification(self):
         """Send startup notification to Discord"""
+        influx_status = "Enabled" if self.influx_writer else "Disabled"
+        
         alert_data = {
             "alert_name": "Queue Monitoring Started",
-            "description": f"QUEUE MONITORING ONLINE\n\nMonitoring {len(self.target_queues)} queues\nConnected to {self.target_system_name}\nDiscord alerts active\n\nCORE Queues: {len(self.core_queues)}\nSUPPORT Queues: {len(self.support_queues)}\nTarget: {self.rabbitmq_host}:{self.rabbitmq_port}\n\nAlert System: Discord Only",
+            "description": f"QUEUE MONITORING ONLINE\n\nMonitoring **{len(self.target_queues)}** queues\nConnected to **{self.target_system_name}**\nDiscord alerts active\n\n**CORE** Queues: {len(self.core_queues)}\n**SUPPORT** Queues: {len(self.support_queues)}\nTarget: {self.rabbitmq_host}:{self.rabbitmq_port}\n\nAlert System: Discord Only\nInfluxDB Storage: {influx_status}\nQueue Discovery: {'Enabled' if self.queue_discovery_enabled else 'Disabled'}",
             "severity": "info",
             "alert_type": "system_startup",
             "status": "firing",
             "system": "RMQ-Queue",
             "target_system": self.target_system_name,
-            "monitoring_mode": self.monitoring_mode
+            "monitoring_mode": self.monitoring_mode,
+            "influxdb_status": influx_status
         }
         self.send_discord_alert(alert_data)
     
@@ -546,7 +691,7 @@ class ProductionGPSMonitor:
 
         alert_data = {
             "alert_name": "Queue Monitoring Stopped",
-            "description": f"QUEUE MONITORING OFFLINE\n\nMonitoring shutdown detected\nNo more alerts will be sent until restart.\n\nTarget: {self.target_system_name}\nMode: {self.monitoring_mode}",
+            "description": f"QUEUE MONITORING OFFLINE\n\nMonitoring shutdown detected\nNo more alerts will be sent until restart.\n\nTarget: **{self.target_system_name}**\nMode: {self.monitoring_mode}",
             "severity": "warning",
             "alert_type": "system_shutdown",
             "status": "firing",
@@ -613,12 +758,41 @@ class ProductionGPSMonitor:
         except Exception as e:
             logger.error(f"Error reloading configuration: {e}")
     
+    def cleanup(self):
+        """Cleanup resources on shutdown"""
+        try:
+            logger.info("Starting cleanup process...")
+            
+            if hasattr(self, 'observer'):
+                self.observer.stop()
+                self.observer.join()
+                logger.info("File observer stopped")
+            
+            if hasattr(self, 'health_server'):
+                self.health_server.stop()
+                logger.info("Health server stopped")
+            
+            # NEW: Close InfluxDB connection
+            if hasattr(self, 'influx_writer') and self.influx_writer:
+                self.influx_writer.close()
+                logger.info("InfluxDB connection closed")
+            
+            # Send shutdown notification
+            self.send_shutdown_notification()
+            logger.info("Shutdown notification sent")
+            
+            logger.info("Cleanup completed successfully")
+            
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+    
     def run(self):
         """Main monitoring loop"""
-        logger.info("Starting Queue Queue Monitoring")
+        logger.info("Starting GPS Queue Monitoring System")
         logger.info(f"Target: {self.rabbitmq_host}:{self.rabbitmq_port}")
         logger.info(f"Mode: {self.monitoring_mode} (read-only: {self.read_only_mode})")
         logger.info(f"Queues: {len(self.target_queues)} total ({len(self.core_queues)} CORE)")
+        logger.info(f"InfluxDB: {'Enabled' if self.influx_writer else 'Disabled'}")
         logger.info("Alert system: Discord only")
         
         # Test connectivity
@@ -629,6 +803,18 @@ class ProductionGPSMonitor:
         except Exception as e:
             logger.error(f"Failed to connect to target RabbitMQ: {e}")
             raise
+        
+        # Test InfluxDB connectivity if enabled
+        if self.influx_writer:
+            try:
+                if self.influx_writer.health_check():
+                    logger.info("InfluxDB connection verified")
+                else:
+                    logger.warning("InfluxDB health check failed - continuing without storage")
+                    self.influx_writer = None
+            except Exception as e:
+                logger.warning(f"InfluxDB connection test failed: {e} - continuing without storage")
+                self.influx_writer = None
         
         # Send startup notification
         self.send_startup_notification()
@@ -660,18 +846,101 @@ class ProductionGPSMonitor:
             logger.error(f"Error in monitoring loop: {e}")
             raise
         finally:
-            # Cleanup
-            if hasattr(self, 'observer'):
-                self.observer.stop()
-                self.observer.join()
-            
-            if hasattr(self, 'health_server'):
-                self.health_server.stop()
-            
-            # Send shutdown notification
-            self.send_shutdown_notification()
+            # Cleanup resources
+            self.cleanup()
+
+
+def signal_handler(signum, frame):
+    """Graceful shutdown handler"""
+    print(f"\nReceived signal {signum}, shutting down gracefully...")
+    
+    try:
+        monitor = getattr(signal_handler, 'monitor_instance', None)
+        if monitor:
+            monitor.cleanup()
+    except Exception as e:
+        print(f"Error during shutdown: {e}")
+    
+    print("GPS Monitor shutdown complete")
+    sys.exit(0)
+
+
+def main():
+    """Main entry point"""
+    print("GPS Production Monitor v3.0 (InfluxDB + Discord)")
+    print("=" * 60)
+    
+    # Setup logging
+    log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+    log_format = os.getenv('LOG_FORMAT', 'json')
+    
+    if log_format.lower() == 'json':
+        import json as json_lib
+        
+        class JSONFormatter(logging.Formatter):
+            def format(self, record):
+                log_entry = {
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'level': record.levelname,
+                    'service': 'gps-monitor',
+                    'message': record.getMessage(),
+                    'module': record.module,
+                    'function': record.funcName,
+                    'line': record.lineno
+                }
+                if record.exc_info:
+                    log_entry['exception'] = self.formatException(record.exc_info)
+                return json_lib.dumps(log_entry)
+        
+        handler = logging.StreamHandler()
+        handler.setFormatter(JSONFormatter())
+    else:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        handler.setFormatter(formatter)
+    
+    root_logger = logging.getLogger()
+    root_logger.addHandler(handler)
+    root_logger.setLevel(getattr(logging, log_level))
+    
+    logger = logging.getLogger(__name__)
+    
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Validate environment
+    required_vars = [
+        'RABBITMQ_HOST',
+        'RABBITMQ_USERNAME',
+        'RABBITMQ_PASSWORD',
+        'DISCORD_WEBHOOK_URL'
+    ]
+    
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    if missing_vars:
+        logger.error(f"Missing required environment variables: {missing_vars}")
+        sys.exit(1)
+    
+    # Initialize monitor
+    try:
+        monitor = ProductionGPSMonitor()
+        signal_handler.monitor_instance = monitor
+        
+        logger.info("GPS Monitor initialized successfully")
+        logger.info(f"Target: {os.getenv('RABBITMQ_HOST')}:{os.getenv('RABBITMQ_PORT')}")
+        logger.info(f"Mode: {os.getenv('MONITORING_MODE', 'remote')}")
+        logger.info("Alert system: Discord + InfluxDB")
+        
+        # Start monitoring
+        monitor.run()
+        
+    except Exception as e:
+        logger.error(f"Failed to start GPS monitor: {e}", exc_info=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    monitor = ProductionGPSMonitor()
-    monitor.run()
+    main()

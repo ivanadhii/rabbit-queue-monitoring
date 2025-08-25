@@ -1,0 +1,28 @@
+# GPS Dashboard Dependencies
+# ===========================
+
+# Web Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# InfluxDB Client
+influxdb-client>=1.38.0
+
+# WebSocket Support
+websockets>=11.0
+
+# Configuration
+python-dotenv>=1.0.0
+
+# JSON handling
+ujson>=5.8.0
+
+# Date/Time utilities
+python-dateutil>=2.8.0
+pytz>=2023.3
+
+# Static file serving
+aiofiles>=23.2.1
+
+# CORS support
+python-multipart>=0.0.6

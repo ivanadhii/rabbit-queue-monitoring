@@ -1,5 +1,5 @@
-# GPS Monitoring Dependencies (Discord Only)
-# ==========================================
+# GPS Monitoring Dependencies (InfluxDB + Discord)
+# ==================================================
 
 # Core HTTP and API libraries
 requests>=2.31.0
@@ -14,6 +14,9 @@ watchdog>=3.0.0
 
 # JSON validation and processing
 jsonschema>=4.0.0
+
+# InfluxDB Integration (NEW)
+influxdb-client>=1.38.0
 
 # Additional utilities
 pytz>=2023.3

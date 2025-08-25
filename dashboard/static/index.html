@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPS Queue Monitoring Dashboard</title>
+    
+    <!-- Chart.js UMD + date-fns adapter UMD -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-adapter-date-fns/3.0.0/chartjs-adapter-date-fns.min.js"></script>
+
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+    
+    <!-- Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐰</text></svg>">
+</head>
+<body>
+    <div class="dashboard-container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h2>GPS Queue Monitor</h2>
+                <div class="connection-status" id="connection-status">
+                    <span class="status-indicator connecting"></span>
+                    Connecting...
+                </div>
+            </div>
+            
+            <div class="sidebar-content">
+                <!-- View Selection -->
+                <div class="section">
+                    <h3>Dashboard Views</h3>
+                    <div class="radio-group">
+                        <label>
+                            <input type="radio" name="view" value="timeseries" checked>
+                            <span class="radio-custom"></span>
+                            Time Series Charts
+                        </label>
+                        <label>
+                            <input type="radio" name="view" value="table">
+                            <span class="radio-custom"></span>
+                            Data Table
+                        </label>
+                        <label>
+                            <input type="radio" name="view" value="analytics">
+                            <span class="radio-custom"></span>
+                            System Analytics
+                        </label>
+                    </div>
+                </div>
+                
+                <!-- Time Range Selection (for timeseries/table views) -->
+                <div class="section" id="time-range-section">
+                    <h3>Time Range</h3>
+                    <div class="radio-group">
+                        <label>
+                            <input type="radio" name="timeRange" value="1h">
+                            <span class="radio-custom"></span>
+                            Last 1 Hour
+                        </label>
+                        <label>
+                            <input type="radio" name="timeRange" value="8h" checked>
+                            <span class="radio-custom"></span>
+                            Last 8 Hours
+                        </label>
+                        <label>
+                            <input type="radio" name="timeRange" value="1d">
+                            <span class="radio-custom"></span>
+                            Last 1 Day
+                        </label>
+                    </div>
+                    
+                    <div class="custom-range">
+                        <h4>Custom Range</h4>
+                        <div class="input-group">
+                            <label>From:</label>
+                            <input type="datetime-local" id="time-from">
+                        </div>
+                        <div class="input-group">
+                            <label>To:</label>
+                            <input type="datetime-local" id="time-to">
+                        </div>
+                        <button class="btn-secondary" onclick="applyCustomRange()">Apply</button>
+                    </div>
+                </div>
+                
+                <!-- Analytics Options (for analytics view) -->
+                <div class="section" id="analytics-section" style="display: none;">
+                    <h3>Analytics Options</h3>
+                    <div class="radio-group">
+                        <label>
+                            <input type="radio" name="analyticsPeriod" value="current" checked>
+                            <span class="radio-custom"></span>
+                            Current Usage
+                        </label>
+                        <label>
+                            <input type="radio" name="analyticsPeriod" value="projection">
+                            <span class="radio-custom"></span>
+                            Growth Projections
+                        </label>
+                    </div>
+                    
+                    <button class="btn-primary" onclick="refreshAnalytics()">
+                        🔄 Refresh Data
+                    </button>
+                </div>
+                
+                <!-- Export Options -->
+                <div class="section">
+                    <h3>Export Data</h3>
+                    <div class="export-buttons">
+                        <button class="btn-secondary" onclick="exportData('csv')">
+                            📄 Export CSV
+                        </button>
+                        <button class="btn-secondary" onclick="exportData('json')">
+                            📋 Export JSON
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- System Info -->
+                <div class="section">
+                    <h3>System Info</h3>
+                    <div class="system-info">
+                        <div class="info-item">
+                            <span class="label">Target:</span>
+                            <span id="target-system">Loading...</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Queues:</span>
+                            <span id="queue-count">0</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Last Update:</span>
+                            <span id="last-update">Never</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Main Content -->
+        <div class="main-content">
+            <div class="content-header">
+                <h1 id="content-title">Queue Time Series</h1>
+                <div class="header-actions">
+                    <div class="system-status" id="system-status">
+                        <span class="status-label">System:</span>
+                        <span class="status-value healthy">HEALTHY</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="content-body" id="main-content">
+                <!-- Loading state -->
+                <div class="loading-container" id="loading">
+                    <div class="loading-spinner"></div>
+                    <p>Loading queue data...</p>
+                </div>
+                
+                <!-- Queue Cards Container (Time Series View) -->
+                <div class="queue-container" id="queue-container" style="display: none;">
+                    <!-- Queue cards will be dynamically inserted here -->
+                </div>
+                
+                <!-- Table View Container -->
+                <div class="table-container" id="table-container" style="display: none;">
+                    <!-- Table will be dynamically inserted here -->
+                </div>
+                
+                <!-- Analytics View Container -->
+                <div class="analytics-container" id="analytics-container" style="display: none;">
+                    <!-- Analytics will be dynamically inserted here -->
+                </div>
+                
+                <!-- Error Container -->
+                <div class="error-container" id="error-container" style="display: none;">
+                    <div class="error-message">
+                        <h3>❌ Connection Error</h3>
+                        <p id="error-text">Unable to connect to the monitoring system.</p>
+                        <button class="btn-primary" onclick="location.reload()">Retry</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Notification Toast -->
+    <div class="toast" id="notification-toast">
+        <div class="toast-content">
+            <span class="toast-icon"></span>
+            <span class="toast-message"></span>
+        </div>
+    </div>
+    
+    <!-- Scripts -->
+    <script src="/static/js/charts.js"></script>
+    <script src="/static/js/websocket.js"></script>
+    <script src="/static/js/analytics.js"></script>
+    <script src="/static/js/table.js"></script>
+    
+    <script>
+        // Global application state
+        let currentView = 'timeseries';
+        let currentTimeRange = '8h';
+        let queueData = [];
+        
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeDashboard();
+        });
+        
+        async function initializeDashboard() {
+            try {
+                // Setup event listeners
+                setupEventListeners();
+                
+                // Initialize WebSocket connection
+                websocketManager = new WebSocketManager();
+                await websocketManager.connect();
+                
+                // Load initial data
+                await loadInitialData();
+                
+                // Start periodic updates
+                startPeriodicUpdates();
+                
+                console.log('Dashboard initialized successfully');
+                
+            } catch (error) {
+                console.error('Dashboard initialization failed:', error);
+                showError('Failed to initialize dashboard');
+            }
+        }
+        
+        function setupEventListeners() {
+            // View selection
+            document.querySelectorAll('input[name="view"]').forEach(radio => {
+                radio.addEventListener('change', handleViewChange);
+            });
+            
+            // Time range selection
+            document.querySelectorAll('input[name="timeRange"]').forEach(radio => {
+                radio.addEventListener('change', handleTimeRangeChange);
+            });
+            
+            // Analytics period selection
+            document.querySelectorAll('input[name="analyticsPeriod"]').forEach(radio => {
+                radio.addEventListener('change', handleAnalyticsPeriodChange);
+            });
+        }
+        
+        async function loadInitialData() {
+            showLoading();
+            
+            try {
+                // Load queue list
+                const response = await fetch('/api/queues');
+                if (!response.ok) throw new Error('Failed to fetch queues');
+                
+                queueData = await response.json();
+                updateSystemInfo();
+                
+                // Load current view
+                await switchView(currentView);
+                
+            } catch (error) {
+                console.error('Error loading initial data:', error);
+                showError('Failed to load queue data');
+            }
+        }
+        
+        async function handleViewChange(event) {
+            const newView = event.target.value;
+            await switchView(newView);
+        }
+        
+        async function handleTimeRangeChange(event) {
+            currentTimeRange = event.target.value;
+            if (currentView === 'timeseries') {
+                await loadTimeSeriesView();
+            } else if (currentView === 'table') {
+                await loadTableView();
+            }
+        }
+        
+        function handleAnalyticsPeriodChange(event) {
+            if (currentView === 'analytics') {
+                loadAnalyticsView();
+            }
+        }
+        
+        async function switchView(viewName) {
+            currentView = viewName;
+            
+            // Update sidebar sections visibility
+            document.getElementById('time-range-section').style.display = 
+                ['timeseries', 'table'].includes(viewName) ? 'block' : 'none';
+            document.getElementById('analytics-section').style.display = 
+                viewName === 'analytics' ? 'block' : 'none';
+            
+            // Hide all content containers
+            document.getElementById('queue-container').style.display = 'none';
+            document.getElementById('table-container').style.display = 'none';
+            document.getElementById('analytics-container').style.display = 'none';
+            
+            // Update content title
+            const titles = {
+                'timeseries': 'Queue Time Series',
+                'table': 'Data Table View',
+                'analytics': 'System Analytics'
+            };
+            document.getElementById('content-title').textContent = titles[viewName];
+            
+            // Load view-specific content
+            showLoading();
+            
+            try {
+                switch (viewName) {
+                    case 'timeseries':
+                        await loadTimeSeriesView();
+                        break;
+                    case 'table':
+                        await loadTableView();
+                        break;
+                    case 'analytics':
+                        await loadAnalyticsView();
+                        break;
+                }
+            } catch (error) {
+                console.error(`Error loading ${viewName} view:`, error);
+                showError(`Failed to load ${viewName} view`);
+            }
+        }
+        
+        function updateSystemInfo() {
+            document.getElementById('queue-count').textContent = queueData.length;
+            document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+        }
+        
+        function showLoading() {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('error-container').style.display = 'none';
+        }
+        
+        function hideLoading() {
+            document.getElementById('loading').style.display = 'none';
+        }
+        
+        function showError(message) {
+            hideLoading();
+            document.getElementById('error-text').textContent = message;
+            document.getElementById('error-container').style.display = 'block';
+        }
+        
+        function showNotification(message, type = 'info') {
+            const toast = document.getElementById('notification-toast');
+            const icon = toast.querySelector('.toast-icon');
+            const messageEl = toast.querySelector('.toast-message');
+            
+            // Set icon based on type
+            const icons = {
+                'info': 'ℹ️',
+                'success': '✅',
+                'warning': '⚠️',
+                'error': '❌'
+            };
+            
+            icon.textContent = icons[type] || icons.info;
+            messageEl.textContent = message;
+            
+            // Show toast
+            toast.classList.add('show');
+            
+            // Hide after 3 seconds
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+        
+        function startPeriodicUpdates() {
+            // Update every 30 seconds when not using WebSocket
+            setInterval(() => {
+                if (currentView === 'timeseries' && websocketManager && !websocketManager.isConnectedNow()) {
+                    loadTimeSeriesView();
+                }
+            }, 30000);
+        }
+        
+        // Global functions for UI interactions
+        async function applyCustomRange() {
+            const fromEl = document.getElementById('time-from');
+            const toEl = document.getElementById('time-to');
+            
+            if (!fromEl.value || !toEl.value) {
+                showNotification('Please select both from and to dates', 'warning');
+                return;
+            }
+            
+            const fromTime = new Date(fromEl.value).toISOString();
+            const toTime = new Date(toEl.value).toISOString();
+            
+            if (fromTime >= toTime) {
+                showNotification('From time must be before to time', 'warning');
+                return;
+            }
+            
+            // Apply custom range based on current view
+            if (currentView === 'table') {
+                await loadTableView(fromTime, toTime);
+            }
+            // Note: Custom range for timeseries requires API enhancement
+        }
+        
+        async function exportData(format) {
+            try {
+                const params = new URLSearchParams();
+                const customFrom = document.getElementById('time-from').value;
+                const customTo = document.getElementById('time-to').value;
+                
+                if (customFrom && customTo) {
+                    params.set('from_time', new Date(customFrom).toISOString());
+                    params.set('to_time', new Date(customTo).toISOString());
+                }
+                
+                const url = `/api/metrics/export/${format}?${params.toString()}`;
+                const response = await fetch(url);
+                
+                if (!response.ok) throw new Error('Export failed');
+                
+                // Trigger download
+                const blob = await response.blob();
+                const downloadUrl = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = `queue-metrics-${new Date().toISOString().split('T')[0]}.${format}`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(downloadUrl);
+                
+                showNotification(`Data exported successfully as ${format.toUpperCase()}`, 'success');
+                
+            } catch (error) {
+                console.error('Export error:', error);
+                showNotification('Export failed', 'error');
+            }
+        }
+        
+        async function refreshAnalytics() {
+            try {
+                const response = await fetch('/api/analytics/refresh', { method: 'POST' });
+                if (!response.ok) throw new Error('Refresh failed');
+                
+                if (currentView === 'analytics') {
+                    await loadAnalyticsView();
+                }
+                
+                showNotification('Analytics data refreshed', 'success');
+                
+            } catch (error) {
+                console.error('Refresh error:', error);
+                showNotification('Failed to refresh analytics', 'error');
+            }
+        }
+    </script>
+</body>
+</html>
